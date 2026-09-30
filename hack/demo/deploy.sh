@@ -115,18 +115,57 @@ ensure_aks_cluster() {
     --no-wait
 }
 
-# Join an existing cluster to Application Network and wait for provisioning.
+# Wait until the public east-west gateway can carry cross-cluster traffic.
+wait_for_external_east_west_gateway() {
+  local kubeconfig="$1"
+  local member_name="$2"
+  local address programmed
+  for _ in $(seq 1 180); do
+    address="$(KUBECONFIG="$kubeconfig" kubectl -n applink-system get gateway istio-eastwestgateway \
+      -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
+    programmed="$(KUBECONFIG="$kubeconfig" kubectl -n applink-system get gateway istio-eastwestgateway \
+      -o jsonpath='{range .status.conditions[?(@.type=="Programmed")]}{.status}{end}' 2>/dev/null || true)"
+    printf 'Application Network member %s east-west address=%s programmed=%s\n' \
+      "$member_name" "${address:-pending}" "${programmed:-pending}"
+    if [[ "$programmed" == "True" && -n "$address" ]] && \
+       curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+         "http://$address:15021/healthz/ready" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 20
+  done
+  KUBECONFIG="$kubeconfig" kubectl -n applink-system describe gateway istio-eastwestgateway || true
+  die "Application Network east-west gateway for $member_name did not become externally reachable"
+}
+
+# Join an existing cluster to Application Network and wait for its data plane.
 ensure_appnet_member() {
   local member_name="$1"
   local cluster_id="$2"
   local member_location="$3"
-  local output state joined=false
+  local kubeconfig="$4"
+  local output state gateway_visibility joined=false
   if az appnet member show \
       --resource-group "$RESOURCE_GROUP" \
       --appnet-name "$APPNET_NAME" \
       --member-name "$member_name" \
       -o none 2>/dev/null; then
     log "Application Network member $member_name already exists"
+    gateway_visibility="$(az appnet member show \
+      --resource-group "$RESOURCE_GROUP" \
+      --appnet-name "$APPNET_NAME" \
+      --member-name "$member_name" \
+      --query properties.connectivityProfile.eastWestGateway.visibility -o tsv)"
+    if [[ "$gateway_visibility" != "External" ]]; then
+      log "Making the $member_name east-west gateway externally reachable"
+      az appnet member update \
+        --resource-group "$RESOURCE_GROUP" \
+        --appnet-name "$APPNET_NAME" \
+        --member-name "$member_name" \
+        --east-west-gateway External \
+        --no-wait \
+        -o none
+    fi
     joined=true
   else
     log "Joining $member_name to Application Network"
@@ -138,6 +177,7 @@ ensure_appnet_member() {
           --member-name "$member_name" \
           --member-resource-id "$cluster_id" \
           --member-location "$member_location" \
+          --east-west-gateway External \
           --upgrade-mode FullyManaged \
           --release-channel Stable \
           --no-wait 2>&1)"; then
@@ -154,16 +194,25 @@ ensure_appnet_member() {
   fi
   [[ "$joined" == true ]] || die "Application Network member $member_name was not accepted"
 
-  # Poll explicitly so failed provisioning surfaces the complete member state.
+  # The preview RP can briefly report Failed while the external gateway rolls out.
   for _ in $(seq 1 180); do
     state="$(az appnet member show \
       --resource-group "$RESOURCE_GROUP" \
       --appnet-name "$APPNET_NAME" \
       --member-name "$member_name" \
       --query properties.provisioningState -o tsv 2>/dev/null || true)"
-    printf 'Application Network member %s state=%s\n' "$member_name" "${state:-pending}"
+    gateway_visibility="$(az appnet member show \
+      --resource-group "$RESOURCE_GROUP" \
+      --appnet-name "$APPNET_NAME" \
+      --member-name "$member_name" \
+      --query properties.connectivityProfile.eastWestGateway.visibility -o tsv 2>/dev/null || true)"
+    printf 'Application Network member %s state=%s east-west=%s\n' \
+      "$member_name" "${state:-pending}" "${gateway_visibility:-pending}"
+    if [[ "$gateway_visibility" == "External" ]]; then
+      wait_for_external_east_west_gateway "$kubeconfig" "$member_name"
+      return 0
+    fi
     case "$state" in
-      Succeeded) return 0 ;;
       Failed|Canceled|Cancelled)
         az appnet member show \
           --resource-group "$RESOURCE_GROUP" \
@@ -214,15 +263,16 @@ wait_for_regional_workloads() {
 
 # The Gateway publishes the VIP after the controller programs Azure.
 wait_for_global_address() {
-  local address programmed azure_ready members_ready
+  local address programmed accepted azure_ready members_ready
   for _ in $(seq 1 240); do
     address="$(KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get gateway global-demo -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
     programmed="$(KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get gateway global-demo -o json 2>/dev/null | jq -r '[.status.conditions[]? | select(.type=="Programmed") | .status] | last // "False"' || true)"
+    accepted="$(KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get globalgatewaypolicy global-demo -o json 2>/dev/null | jq -r '[.status.conditions[]? | select(.type=="Accepted") | .status] | last // "False"' || true)"
     azure_ready="$(KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get globalgatewaypolicy global-demo -o json 2>/dev/null | jq -r '[.status.conditions[]? | select(.type=="AzureResourcesReady") | .status] | last // "False"' || true)"
     members_ready="$(KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get globalgatewaypolicy global-demo -o json 2>/dev/null | jq -r '[.status.conditions[]? | select(.type=="MembersReady") | .status] | last // "False"' || true)"
-    printf 'global gateway address=%s programmed=%s azure=%s members=%s\n' \
-      "${address:-pending}" "$programmed" "$azure_ready" "$members_ready" >&2
-    if [[ -n "$address" && "$programmed" == "True" && \
+    printf 'global gateway address=%s programmed=%s accepted=%s azure=%s members=%s\n' \
+      "${address:-pending}" "$programmed" "$accepted" "$azure_ready" "$members_ready" >&2
+    if [[ -n "$address" && "$programmed" == "True" && "$accepted" == "True" && \
           "$azure_ready" == "True" && "$members_ready" == "True" ]]; then
       printf '%s' "$address"
       return 0
@@ -234,6 +284,7 @@ wait_for_global_address() {
 }
 
 require_command az
+require_command curl
 require_command kubectl
 require_command jq
 require_command sed
@@ -394,8 +445,8 @@ if ! az appnet show -g "$RESOURCE_GROUP" -n "$APPNET_NAME" -o none 2>/dev/null; 
     -o none
 fi
 
-ensure_appnet_member "$EAST_MEMBER" "$EAST_CLUSTER_ID" "$EAST_REGION"
-ensure_appnet_member "$WEST_MEMBER" "$WEST_CLUSTER_ID" "$WEST_REGION"
+ensure_appnet_member "$EAST_MEMBER" "$EAST_CLUSTER_ID" "$EAST_REGION" "$EAST_KUBECONFIG"
+ensure_appnet_member "$WEST_MEMBER" "$WEST_CLUSTER_ID" "$WEST_REGION" "$WEST_KUBECONFIG"
 wait_for_gateway_class "$EAST_KUBECONFIG" "$EAST_CLUSTER"
 wait_for_gateway_class "$WEST_KUBECONFIG" "$WEST_CLUSTER"
 
@@ -428,7 +479,12 @@ fi
 ACR_SERVER="$(az acr show -g "$RESOURCE_GROUP" -n "$ACR_NAME" --query loginServer -o tsv)"
 ACR_USERNAME="$(az acr credential show -g "$RESOURCE_GROUP" -n "$ACR_NAME" --query username -o tsv)"
 ACR_PASSWORD="$(az acr credential show -g "$RESOURCE_GROUP" -n "$ACR_NAME" --query 'passwords[0].value' -o tsv)"
-CONTROLLER_IMAGE="$ACR_SERVER/glb-gateway-controller:$CONTROLLER_IMAGE_TAG"
+CONTROLLER_IMAGE_DIGEST="$(az acr repository show \
+  --name "$ACR_NAME" \
+  --image "glb-gateway-controller:$CONTROLLER_IMAGE_TAG" \
+  --query digest -o tsv)"
+[[ "$CONTROLLER_IMAGE_DIGEST" == sha256:* ]] || die "controller image digest was not available"
+CONTROLLER_IMAGE="$ACR_SERVER/glb-gateway-controller@$CONTROLLER_IMAGE_DIGEST"
 
 # Run the controller on a member cluster and project its Azure token explicitly.
 log "Creating the controller service principal"

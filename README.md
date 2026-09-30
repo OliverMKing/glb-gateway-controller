@@ -22,6 +22,9 @@ requires the stable `placement.kubernetes-fleet.io/v1` and
 Every selected AKS cluster must also be joined to the same Application Network.
 Services labeled `istio.io/global=true` can fall back through the managed
 east-west data plane when one member has no ready local endpoints.
+The demo uses external Application Network east-west gateways so the two AKS
+virtual networks do not need peering. Application Network protects this path
+with mutual TLS.
 The policy does not contain an Application Network resource ID. The MVP assumes
 that all selected Fleet members use the same Application Network. It always
 uses only members where Fleet reports that the workload was applied.
@@ -49,6 +52,8 @@ installs the controller API and RBAC on the Fleet hub, runs the controller in
 one member cluster, places region-labelled backing services, applies the global
 Gateway and HTTPRoute, and exits only after the global public IP returns
 `hello from eastus2` or `hello from westus3`.
+The controller Deployment uses the exact ACR image digest, and the script waits
+for the policy `Accepted`, `MembersReady`, and `AzureResourcesReady` conditions.
 
 The managed Fleet hub does not run user workloads. The script runs the
 controller in the east member cluster and mounts a short-lived hub kubeconfig.

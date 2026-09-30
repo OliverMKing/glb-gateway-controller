@@ -239,6 +239,7 @@ az appnet member join \
   --member-name "$EAST_MEMBER" \
   --member-resource-id "$EAST_CLUSTER_ID" \
   --member-location "$EAST_REGION" \
+  --east-west-gateway External \
   --upgrade-mode FullyManaged \
   --release-channel Stable
 
@@ -248,11 +249,17 @@ az appnet member join \
   --member-name "$WEST_MEMBER" \
   --member-resource-id "$WEST_CLUSTER_ID" \
   --member-location "$WEST_REGION" \
+  --east-west-gateway External \
   --upgrade-mode FullyManaged \
   --release-channel Stable
 ```
 
-Wait for both members and the managed regional GatewayClass:
+The demo uses external east-west gateways. This gives the two AKS virtual
+networks a reachable cross-cluster path without VNet peering. Application
+Network protects cross-cluster traffic with mutual TLS.
+
+Wait for both members, the managed regional GatewayClass, and the east-west
+Gateway:
 
 ```bash
 az appnet member show \
@@ -269,9 +276,18 @@ az appnet member show \
 
 KUBECONFIG="$EAST_KUBECONFIG" kubectl get gatewayclass istio
 KUBECONFIG="$WEST_KUBECONFIG" kubectl get gatewayclass istio
+
+KUBECONFIG="$EAST_KUBECONFIG" kubectl -n applink-system get \
+  gateway/istio-eastwestgateway
+
+KUBECONFIG="$WEST_KUBECONFIG" kubectl -n applink-system get \
+  gateway/istio-eastwestgateway
 ```
 
-Each provisioning state should be `Succeeded`.
+Each east-west Gateway must report `Programmed=True` and a public address. The
+automated script also checks the public readiness endpoint. The preview
+resource provider can briefly report `Failed` while a visibility update rolls
+out, so the script uses the ready data plane as the final gate.
 
 ## 5. Build and deploy the controller
 
@@ -287,6 +303,9 @@ service principal has these Azure permissions:
 It also installs Gateway API v1.4.1 CRDs on the hub and grants lease access for
 controller-runtime leader election. See `hack/demo/deploy.sh` for the exact,
 idempotent commands.
+
+The Deployment uses the ACR image digest. It does not depend on a mutable image
+tag or a cached node image.
 
 For local controller development, the Azure CLI credential remains a useful
 alternative:
@@ -532,7 +551,7 @@ and `westus3`, one Fleet hub, and one Application Network:
 - Both regional Gateway Azure rules reported `enableFloatingIP=false`.
 - The global public IP returned HTTP 200 repeatedly.
 - With east at zero pods and zero ready EndpointSlice endpoints, the east
-  regional IP returned 30/30 successful responses from west.
+  regional IP returned a successful response from west.
 - During the same steady outage, the global IP returned 30/30 successful
   responses.
 - Restoring east returned the environment to two ready replicas in each
@@ -562,7 +581,7 @@ Ingress returns `503` when one member has no pods:
   `istio.io/ingress-use-waypoint=true`.
 - Confirm the waypoint Gateway has `istio.io/global=true` under
   `spec.infrastructure.labels`.
-- Confirm both Application Network members are `Succeeded` and the remote
+- Confirm both east-west Gateways have reachable addresses and the remote
   cluster has ready endpoints.
 
 Fleet applies one member but waits before the next:

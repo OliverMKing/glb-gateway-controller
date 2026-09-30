@@ -320,11 +320,10 @@ Fleet and Application Network have complementary jobs:
   discovery mechanism.
 
 Every Fleet member selected by a `GlobalGatewayPolicy` must also be joined to
-the same Application Network resource. The controller maps the two inventories
-by AKS resource ID and rejects a policy if the selected set spans Application
-Networks or contains a member that is not joined. The policy supplies the
-Application Network ARM resource ID; Fleet remains the authority for which
-subset serves the application.
+the same Application Network resource. This is an MVP deployment requirement.
+The policy does not contain the Application Network ARM resource ID, and the
+controller does not validate this membership through ARM. Fleet remains the
+authority for which subset serves the application.
 
 The workload placement must establish the documented Application Network data
 plane contract in every selected member:
@@ -335,8 +334,8 @@ plane contract in every selected member:
   namespace, name, and compatible port definition in each member.
 - The documented waypoint configuration is deployed when L7 service policy is
   required. When a waypoint Service is used, it is also marked global.
-- East-west gateways have network reachability through VNet peering, VPN, or
-  another supported connectivity design.
+- East-west gateways have network reachability through external gateway
+  addresses, VNet peering, VPN, or another supported connectivity design.
 - Managed Gateway API is enabled and Application Network provides an accepted
   `istio` GatewayClass.
 
@@ -742,7 +741,7 @@ infrastructure, while Application Network handles Service endpoint selection.
 |---|---|---|
 | Service does not exist before enrollment | Yes; it is never enrolled | The backend dependency cannot be proven in the applied workload placement snapshot. |
 | Existing Service is deleted from Fleet placement | Eventually, through controller reconciliation | Fleet publishes a new snapshot/apply state, then the controller removes the Azure backend. This is a control-plane operation with no sub-second or fixed failover guarantee. |
-| One member's Service has zero ready local endpoints | No; removal is unnecessary | Application Network routes to available endpoints in another member through the east-west data plane. In the validated two-region demo, east had zero pods and zero ready endpoints while both its regional ingress and the global VIP returned 30/30 successful responses from west. This measurement is not an SLA. |
+| One member's Service has zero ready local endpoints | No; removal is unnecessary | Application Network routes to available endpoints in another member through the east-west data plane. In the validated two-region demo, east had zero pods and zero ready endpoints, its regional ingress returned a response from west, and the global VIP returned 30/30 successful responses from west. This measurement is not an SLA. |
 | All members have zero ready endpoints | No | No healthy backend exists; the regional gateways can return `503` even though the ingress frontends remain healthy. |
 | Pods remain Ready but return `5xx` | No | Readiness is a false-positive. Fix probes or add explicitly validated retry/outlier policy. |
 | East-west path fails while the selected region has no local endpoints | No | Cross-cluster fallback fails; surface Application Network degradation. |
@@ -826,9 +825,8 @@ in the current MVP.
 The source Gateway exposes the global IP through standard
 `Gateway.status.addresses` and publishes `Accepted` and `Programmed`
 conditions. `GlobalGatewayPolicy.status` contains the same global IP plus the
-load balancer resource ID, Fleet snapshot, Application Network validation,
-per-member frontend IDs, `Reachable` conditions, and these policy condition
-types:
+load balancer resource ID, Fleet snapshot, per-member frontend IDs, and
+`Reachable` conditions. It also contains these policy condition types:
 
 - `Accepted`
 - `MembersReady`
@@ -982,8 +980,8 @@ The validated 2026-09-30 environment proved:
 ### End-to-end MVP
 
 1. Create two AKS clusters in different Azure regions with Managed Gateway API
-   enabled, join both to one Application Network, and configure east-west
-   network reachability.
+   enabled, join both to one Application Network, and configure external
+   east-west gateways or another supported network path.
 2. Create an AKS Fleet with a hub and join both clusters as members.
 3. Stage the test workload and global Service on the hub, including ambient and
    waypoint configuration, and deploy them with a Fleet placement.
