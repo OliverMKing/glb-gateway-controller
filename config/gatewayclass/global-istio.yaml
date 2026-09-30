@@ -1,0 +1,7 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: global-istio
+spec:
+  controllerName: gateway.glb.azure.io/controller
+  description: Azure global LB backed by Application Network Istio

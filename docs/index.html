@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A Fleet-native Gateway API controller that gives a multi-region AKS application one Azure global IP.">
+  <meta name="theme-color" content="#07182d">
+  <title>One Gateway. Multiple AKS regions.</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --page: #06111f;
+      --panel: #0b2036;
+      --line: rgba(151, 204, 241, 0.2);
+      --line-strong: rgba(151, 204, 241, 0.38);
+      --text: #f4f9fd;
+      --muted: #c7d7e3;
+      --dim: #aec4d5;
+      --blue: #43b4ff;
+      --blue-soft: #91d9ff;
+      --cyan: #56e2e8;
+      --green: #68e2a2;
+      --amber: #ffca70;
+      --code: #030b14;
+      --content: 1160px;
+      --radius: 20px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 80px; }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 15% 0%, rgba(67, 180, 255, 0.16), transparent 32rem),
+        linear-gradient(180deg, var(--page), #081827 42rem, #071522);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 17px;
+      line-height: 1.58;
+    }
+
+    a { color: var(--blue-soft); text-underline-offset: 4px; }
+    a:hover { color: #fff; }
+    code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+
+    :not(pre) > code {
+      padding: 0.12rem 0.35rem;
+      border: 1px solid rgba(145, 217, 255, 0.15);
+      border-radius: 6px;
+      color: #d5efff;
+      background: rgba(67, 180, 255, 0.09);
+      font-size: 0.9em;
+    }
+
+    .shell { width: min(calc(100% - 2rem), var(--content)); margin: 0 auto; }
+
+    .topbar {
+      position: sticky;
+      z-index: 20;
+      top: 0;
+      border-bottom: 1px solid var(--line);
+      background: rgba(6, 17, 31, 0.9);
+      backdrop-filter: blur(16px);
+    }
+
+    .topbar-inner {
+      display: flex;
+      min-height: 62px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      color: var(--text);
+      font-size: 0.96rem;
+      font-weight: 760;
+      text-decoration: none;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      color: #fff;
+      background: rgba(67, 180, 255, 0.15);
+    }
+
+    nav { display: flex; gap: 0.15rem; }
+
+    nav a {
+      padding: 0.45rem 0.6rem;
+      border-radius: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      font-weight: 680;
+      text-decoration: none;
+    }
+
+    nav a:hover { color: #fff; background: rgba(255, 255, 255, 0.06); }
+    .hero { padding: clamp(4rem, 9vw, 7rem) 0 4rem; }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.1fr) minmax(330px, 0.9fr);
+      gap: clamp(2rem, 6vw, 5rem);
+      align-items: center;
+    }
+
+    .eyebrow, .kicker {
+      margin: 0 0 0.7rem;
+      color: var(--blue-soft);
+      font-size: 0.9rem;
+      font-weight: 820;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+
+    .kicker {
+      display: inline-block;
+      padding: 0.3rem 0.6rem;
+      border: 1px solid rgba(145, 217, 255, 0.32);
+      border-radius: 999px;
+      background: rgba(67, 180, 255, 0.1);
+    }
+
+    h1, h2, h3 { margin-top: 0; line-height: 1.14; letter-spacing: -0.025em; }
+
+    h1 {
+      margin-bottom: 1.2rem;
+      font-size: clamp(3rem, 7vw, 6.4rem);
+      font-weight: 830;
+    }
+
+    h1 span {
+      color: transparent;
+      background: linear-gradient(100deg, #fff, var(--blue-soft), var(--cyan));
+      background-clip: text;
+      -webkit-background-clip: text;
+    }
+
+    h2 { margin-bottom: 0.75rem; font-size: clamp(1.9rem, 4vw, 3.2rem); }
+    h3 { margin-bottom: 0.5rem; font-size: 1.2rem; }
+    p { margin: 0.6rem 0; }
+
+    .hero-copy {
+      max-width: 720px;
+      color: #c1d3e1;
+      font-size: clamp(1rem, 1.7vw, 1.22rem);
+    }
+
+    .hero-summary {
+      padding: 1.5rem;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      background: rgba(11, 32, 54, 0.78);
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.28);
+    }
+
+    .summary-flow { display: grid; gap: 0.55rem; }
+
+    .summary-node, .flow-node, .topology-node {
+      padding: 0.9rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.03);
+      text-align: center;
+    }
+
+    .summary-node strong, .flow-node strong, .topology-node strong {
+      display: block;
+      font-size: 1rem;
+    }
+
+    .summary-node span, .flow-node span, .topology-node span {
+      display: block;
+      margin-top: 0.18rem;
+      color: var(--dim);
+      font-size: 0.9rem;
+    }
+
+    .summary-node.accent, .flow-node.accent {
+      border-color: rgba(67, 180, 255, 0.45);
+      background: rgba(67, 180, 255, 0.1);
+    }
+
+    .down-arrow {
+      color: var(--blue-soft);
+      font-size: 1.45rem;
+      font-weight: 850;
+      line-height: 1;
+      text-align: center;
+    }
+
+    main { padding-bottom: 5rem; }
+
+    section {
+      margin-top: 1.25rem;
+      padding: clamp(1.4rem, 4vw, 3rem);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: linear-gradient(145deg, rgba(14, 41, 68, 0.76), rgba(8, 25, 42, 0.78));
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.16);
+    }
+
+    .section-head { max-width: 820px; margin-bottom: 1.6rem; }
+    .section-head p:last-child { color: var(--muted); font-size: 1.05rem; }
+
+    .card p { color: var(--muted); font-size: 0.95rem; }
+
+    .user-action {
+      margin-bottom: 1.4rem;
+      padding: 1rem;
+      border: 1px solid rgba(104, 226, 162, 0.35);
+      border-radius: 14px;
+      background: rgba(104, 226, 162, 0.055);
+    }
+
+    .user-action strong { display: block; margin-bottom: 0.35rem; }
+    .user-action p { margin: 0 0 0.75rem; color: var(--muted); }
+    .user-action code { color: var(--green); overflow-wrap: anywhere; }
+
+    .manifest-grid {
+      display: grid;
+      gap: 1rem;
+    }
+
+    .code-panel {
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: 15px;
+      background: var(--code);
+    }
+
+    .code-head {
+      padding: 0.7rem 1rem;
+      border-bottom: 1px solid var(--line);
+      color: var(--dim);
+      background: rgba(255, 255, 255, 0.025);
+      font-size: 0.9rem;
+    }
+
+    pre {
+      overflow: auto;
+      margin: 0;
+      padding: 1.1rem;
+      color: #dcecf6;
+      font-size: 0.9rem;
+      line-height: 1.55;
+    }
+
+    .yaml-comment { color: #7fe3ad; font-style: italic; }
+
+    .note, .card {
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .note strong { display: block; margin-bottom: 0.25rem; font-size: 1rem; }
+    .note p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+
+    .status-box {
+      border-color: rgba(104, 226, 162, 0.35);
+      background: rgba(104, 226, 162, 0.055);
+    }
+
+    .status-box code {
+      display: block;
+      margin-top: 0.55rem;
+      color: var(--green);
+      font-size: 0.95rem;
+      overflow-wrap: anywhere;
+    }
+
+    .subsection { margin-top: 2.5rem; padding-top: 2rem; border-top: 1px solid var(--line); }
+    .subsection > p { max-width: 780px; color: var(--muted); }
+    .topology { margin-top: 1.3rem; }
+
+    .topology-hub {
+      max-width: 620px;
+      margin: 0 auto;
+      border-color: rgba(67, 180, 255, 0.42);
+      background: rgba(67, 180, 255, 0.08);
+    }
+
+    .topology-controller {
+      max-width: 620px;
+      margin: 0 auto;
+      border-color: rgba(185, 138, 255, 0.42);
+      background: rgba(185, 138, 255, 0.08);
+    }
+
+    .topology-branch-grid {
+      --branch-gap: 1.2rem;
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: var(--branch-gap);
+      align-items: start;
+      padding-top: 2.8rem;
+    }
+
+    .topology-branch-grid::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 50%;
+      width: 2px;
+      height: 1.4rem;
+      background: var(--line-strong);
+    }
+
+    .topology-branch-grid::after {
+      content: "";
+      position: absolute;
+      top: 1.4rem;
+      left: calc(25% - (var(--branch-gap) / 4));
+      right: calc(25% - (var(--branch-gap) / 4));
+      height: 2px;
+      background: var(--line-strong);
+    }
+
+    .topology-branch {
+      position: relative;
+      min-width: 0;
+    }
+
+    .topology-branch::before {
+      content: "";
+      position: absolute;
+      top: -1.4rem;
+      left: 50%;
+      width: 2px;
+      height: 1.4rem;
+      background: var(--line-strong);
+    }
+
+    .azure-resources {
+      border-color: rgba(255, 202, 112, 0.38);
+      background: rgba(255, 202, 112, 0.055);
+    }
+
+    .generated-resources {
+      border-color: rgba(104, 226, 162, 0.38);
+      background: rgba(104, 226, 162, 0.055);
+    }
+
+    .placement-label {
+      margin: 0.4rem 0;
+      color: var(--blue-soft);
+      font-size: 0.9rem;
+      font-weight: 760;
+      text-align: center;
+    }
+
+    .member-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      max-width: 850px;
+      margin: 0 auto;
+    }
+
+    .member-list {
+      margin: 0.65rem 0 0;
+      padding-left: 1.1rem;
+      color: var(--muted);
+      font-size: 0.95rem;
+      text-align: left;
+    }
+
+    .member-list li + li { margin-top: 0.25rem; }
+
+    .member-column { display: grid; gap: 0.45rem; }
+
+    .member-arrow {
+      color: var(--blue-soft);
+      font-size: 1.35rem;
+      font-weight: 850;
+      line-height: 1;
+      text-align: center;
+    }
+
+    .entry-flow {
+      display: grid;
+      grid-template-columns: minmax(130px, 0.65fr) 44px minmax(260px, 1.35fr);
+      gap: 0.5rem;
+      align-items: center;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+
+    .flow-arrow {
+      color: var(--blue-soft);
+      font-size: 1.55rem;
+      font-weight: 850;
+      text-align: center;
+    }
+
+    .flow-node.regional {
+      border-color: rgba(255, 202, 112, 0.32);
+      background: rgba(255, 202, 112, 0.055);
+    }
+
+    .flow-node.service {
+      border-color: rgba(104, 226, 162, 0.32);
+      background: rgba(104, 226, 162, 0.055);
+    }
+
+    .path-label {
+      margin: 0.45rem 0;
+      color: var(--blue-soft);
+      font-size: 0.9rem;
+      font-weight: 760;
+      text-align: center;
+    }
+
+    .regional-entry {
+      max-width: 380px;
+      margin: 0 auto;
+    }
+
+    .cluster-boundary {
+      padding: 0.85rem;
+      border: 2px solid rgba(145, 217, 255, 0.34);
+      border-radius: 18px;
+      background: rgba(67, 180, 255, 0.035);
+    }
+
+    .cluster-boundary.fallback {
+      max-width: 650px;
+      margin: 0 auto;
+      border-color: rgba(104, 226, 162, 0.34);
+      background: rgba(104, 226, 162, 0.035);
+    }
+
+    .cluster-title {
+      margin-bottom: 0.7rem;
+      color: var(--blue-soft);
+      font-size: 0.9rem;
+      font-weight: 820;
+      letter-spacing: 0.09em;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    .cluster-flow {
+      display: grid;
+      grid-template-columns: minmax(150px, 1fr) 38px minmax(170px, 1fr) 38px minmax(150px, 1fr);
+      gap: 0.35rem;
+      align-items: center;
+    }
+
+    .cluster-flow.fallback-flow {
+      grid-template-columns: minmax(180px, 1fr) 38px minmax(150px, 1fr);
+      max-width: 520px;
+      margin: 0 auto;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.85rem;
+      margin-top: 1.2rem;
+    }
+
+    .control-flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 0.75rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .control-flow li {
+      position: relative;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.025);
+    }
+
+    .control-flow li:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: calc(50% - 12px);
+      right: -0.78rem;
+      content: "→";
+      color: var(--blue-soft);
+      font-size: 1.1rem;
+      font-weight: 850;
+    }
+
+    .control-flow strong { display: block; margin-bottom: 0.35rem; font-size: 0.95rem; }
+    .control-flow span { color: var(--muted); font-size: 0.9rem; }
+
+    .card-icon {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      margin-bottom: 0.75rem;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      color: var(--blue-soft);
+      background: rgba(67, 180, 255, 0.09);
+      font-size: 0.9rem;
+      font-weight: 850;
+    }
+
+    footer { padding: 2rem 0 3rem; color: var(--dim); font-size: 0.9rem; }
+
+    .footer-inner {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      border-top: 1px solid var(--line);
+      padding-top: 1.2rem;
+    }
+
+    @media (max-width: 980px) {
+      .hero-grid, .manifest-grid { grid-template-columns: 1fr; }
+      .topology-branch-grid {
+        grid-template-columns: 1fr;
+        padding-top: 0.6rem;
+      }
+      .topology-branch-grid::before,
+      .topology-branch-grid::after,
+      .topology-branch::before { display: none; }
+      .control-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .control-flow li:nth-child(3)::after { display: none; }
+    }
+
+    @media (max-width: 720px) {
+      nav { display: none; }
+      .hero { padding-top: 3.5rem; }
+      .member-grid, .card-grid, .control-flow,
+      .entry-flow, .cluster-flow, .cluster-flow.fallback-flow { grid-template-columns: 1fr; }
+
+      .entry-flow, .cluster-flow.fallback-flow { max-width: none; }
+      .flow-arrow { font-size: 0; }
+      .flow-arrow::before { content: "↓"; font-size: 1.45rem; }
+
+      .control-flow li:not(:last-child)::after {
+        top: auto;
+        right: calc(50% - 14px);
+        bottom: -1.05rem;
+        content: "↓";
+      }
+
+      .control-flow li:not(:last-child)::after {
+        display: block;
+        right: calc(50% - 6px);
+        bottom: -1.15rem;
+      }
+
+      .footer-inner { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="#top"><span class="brand-mark">GLB</span><span>Global Gateway Controller</span></a>
+      <nav aria-label="Page sections">
+        <a href="#data-plane">Data plane</a>
+        <a href="#experience">User experience</a>
+        <a href="#control-plane">Control plane</a>
+        <a href="#responsibilities">Components</a>
+        <a href="#use-cases">Use cases</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="hero" id="top">
+    <div class="shell hero-grid">
+      <div>
+        <p class="eyebrow">Working end-to-end</p>
+        <h1>One Gateway.<br><span>Multiple AKS regions.</span></h1>
+        <p class="hero-copy">
+          Give one multi-region AKS application one global public IP. AKS Fleet
+          selects the clusters. Application Network keeps Services available
+          across those clusters. The controller creates the regional L7
+          Gateways and the Azure global entry point.
+        </p>
+      </div>
+
+      <aside class="hero-summary" aria-label="System summary">
+        <div class="summary-flow">
+          <div class="summary-node"><strong>1. The user defines global routing</strong><span>Gateway + HTTPRoute + GlobalGatewayPolicy</span></div>
+          <div class="down-arrow" aria-hidden="true">↓</div>
+          <div class="summary-node"><strong>2. The controller reads Fleet placement</strong><span>Fleet supplies the selected member clusters</span></div>
+          <div class="down-arrow" aria-hidden="true">↓</div>
+          <div class="summary-node"><strong>3. The controller creates regional L7 routing</strong><span>One regional Gateway and route copy in each selected cluster</span></div>
+          <div class="down-arrow" aria-hidden="true">↓</div>
+          <div class="summary-node"><strong>4. The controller connects the regional frontends</strong><span>One Azure global load balancer sends traffic to healthy regions</span></div>
+          <div class="down-arrow" aria-hidden="true">↓</div>
+          <div class="summary-node accent"><strong>5. The application gets one global public IP</strong><span>The IP appears in Gateway.status.addresses</span></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <main class="shell">
+    <section id="data-plane">
+      <div class="section-head">
+        <p class="kicker">1. Data plane</p>
+        <h2>Traffic follows one clear path</h2>
+        <p>
+          Azure selects a healthy regional frontend. The regional Istio
+          Gateway applies the HTTPRoute. Application Network selects a ready
+          Service endpoint in the same cluster or another Fleet member.
+        </p>
+      </div>
+
+      <div role="img" aria-label="Client traffic enters the global load balancer, passes through one selected member cluster, and can use a ready pod in another member cluster when no local pod is ready.">
+        <div class="entry-flow">
+          <div class="flow-node"><strong>Client</strong></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node accent"><strong>Global IP and load balancer</strong><span>Selects the closest healthy regional load balancer</span></div>
+        </div>
+
+        <div class="down-arrow" aria-hidden="true">↓</div>
+        <div class="path-label">Azure sends the connection to the closest healthy regional load balancer</div>
+        <div class="flow-node regional regional-entry"><strong>Regional Azure load balancer</strong><span>Frontend for one Fleet member cluster</span></div>
+        <div class="down-arrow" aria-hidden="true">↓</div>
+
+        <div class="cluster-boundary">
+          <div class="cluster-title">Member cluster selected by the global load balancer</div>
+          <div class="cluster-flow">
+            <div class="flow-node regional"><strong>Istio L7 Gateway</strong><span>Applies the listener and HTTPRoute</span></div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-node service"><strong>Application Network Service</strong><span>Selects a ready endpoint</span></div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-node service"><strong>Local ready pod</strong><span>Used when a local endpoint is ready</span></div>
+          </div>
+        </div>
+
+        <div class="down-arrow" aria-hidden="true">↓</div>
+        <div class="path-label">If no local pod is ready, Application Network forwards the request</div>
+
+        <div class="cluster-boundary fallback">
+          <div class="cluster-title">Another Fleet member cluster</div>
+          <div class="cluster-flow fallback-flow">
+            <div class="flow-node service"><strong>Application Network</strong><span>Receives the cross-cluster request</span></div>
+            <div class="flow-arrow" aria-hidden="true">→</div>
+            <div class="flow-node service"><strong>Ready pod</strong><span>Serves the request</span></div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <section id="experience">
+      <div class="section-head">
+        <p class="kicker">2. User experience</p>
+        <h2>Apply one file to the Fleet hub</h2>
+        <p>
+          First, deploy the application and its Service to the selected member
+          clusters. Then apply <code>gateway.yaml</code> once to the Fleet hub.
+          No routing resource must be applied to each member cluster.
+        </p>
+      </div>
+
+      <div class="user-action">
+        <strong>The only action needed by a user to request a Global Gateway</strong>
+        <p>The file contains the Gateway, HTTPRoutes, and GlobalGatewayPolicy.</p>
+        <code>kubectl --kubeconfig fleet-hub.yaml apply -f gateway.yaml</code>
+      </div>
+
+      <div class="manifest-grid">
+        <div class="code-panel">
+          <div class="code-head">gateway.yaml</div>
+          <pre><code><span class="yaml-comment">## Define the public listener for the application.</span>
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  <span class="yaml-comment">## Use the same namespace for the Gateway, routes, and policy.</span>
+  name: my-app
+  namespace: my-app
+spec:
+  <span class="yaml-comment">## Select the global controller and regional Istio Gateways.</span>
+  gatewayClassName: global-istio
+  <span class="yaml-comment">## The controller copies these listeners to every selected cluster.</span>
+  listeners:
+  - name: https
+    protocol: HTTPS
+    port: 443
+    <span class="yaml-comment">## Terminate TLS at each regional L7 Gateway.</span>
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: my-app-tls
+---
+<span class="yaml-comment">## Define the L7 route once. The controller creates the regional copies.</span>
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-app
+  namespace: my-app
+spec:
+  <span class="yaml-comment">## Attach this route to the global Gateway above.</span>
+  parentRefs:
+  - name: my-app
+  <span class="yaml-comment">## Match requests for this DNS name.</span>
+  hostnames:
+  - app.example.com
+  rules:
+  <span class="yaml-comment">## Send matching requests to this Kubernetes Service.</span>
+  - backendRefs:
+    - name: my-app
+      port: 80
+---
+<span class="yaml-comment">## Connect the Gateway to Fleet and Azure.</span>
+apiVersion: gateway.glb.azure.io/v1alpha1
+kind: GlobalGatewayPolicy
+metadata:
+  name: my-app
+  namespace: my-app
+spec:
+  <span class="yaml-comment">## Select the Gateway that this policy manages.</span>
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: my-app
+  fleet:
+    <span class="yaml-comment">## This placement status is the source of the regional cluster list.</span>
+    workloadPlacementRef:
+      group: placement.kubernetes-fleet.io
+      kind: ClusterResourcePlacement
+      name: my-app
+  azure:
+    <span class="yaml-comment">## Create the global Azure resources in this subscription.</span>
+    subscriptionID: 00000000-0000-0000-0000-000000000000
+    <span class="yaml-comment">## This resource group contains only the global load balancer and IP.</span>
+    resourceGroup: my-app-networking
+    <span class="yaml-comment">## Store the global Azure resources in this Azure location.</span>
+    location: centralus</code></pre>
+        </div>
+
+        <div class="note status-box">
+          <strong>Global address</strong>
+          <p>The standard Gateway status contains the public IP.</p>
+          <code>kubectl get gateway my-app -o jsonpath='{.status.addresses[0].value}'</code>
+        </div>
+      </div>
+
+      <div class="subsection">
+        <p class="kicker">Deployed topology</p>
+        <h3>Fleet and the controller build the complete topology</h3>
+        <p>The hub stores the global intent. The controller creates the regional Gateway resources and the Azure global resources. Fleet places the regional resources in the selected member clusters.</p>
+
+        <div class="topology" role="img" aria-label="The Fleet hub stores global intent. The Global Gateway Controller creates regional Gateway resources for Fleet placement and creates the Azure global load-balancing resources.">
+          <div class="topology-node topology-hub">
+            <strong>AKS Fleet hub</strong>
+            <span>Source Gateway + HTTPRoutes + policy + placement</span>
+          </div>
+          <div class="down-arrow" aria-hidden="true">↓</div>
+          <div class="topology-node topology-controller">
+            <strong>Global Gateway Controller</strong>
+            <span>Reads the global intent and the Fleet placement status</span>
+          </div>
+          <div class="topology-branch-grid">
+            <div class="topology-branch">
+              <div class="down-arrow" aria-hidden="true">↓</div>
+              <div class="placement-label">Creates the regional Gateway infrastructure</div>
+              <div class="topology-node generated-resources">
+                <strong>Generated Fleet resources</strong>
+                <ul class="member-list">
+                  <li>Regional <code>istio</code> Gateway</li>
+                  <li>Attached HTTPRoute copies</li>
+                  <li>Fleet ResourcePlacement</li>
+                </ul>
+              </div>
+              <div class="down-arrow" aria-hidden="true">↓</div>
+              <div class="placement-label">Fleet places the Gateway and route resources</div>
+              <div class="member-grid">
+                <div class="member-column">
+                  <div class="member-arrow" aria-hidden="true">↓</div>
+                  <div class="topology-node">
+                    <strong>Member cluster A</strong>
+                    <ul class="member-list">
+                      <li>Application workload and global Service</li>
+                      <li>Generated regional Gateway and route copies</li>
+                      <li>Application Network data plane</li>
+                      <li>Regional Azure load balancer</li>
+                      <li>Global Gateway Controller runtime</li>
+                    </ul>
+                  </div>
+                </div>
+                <div class="member-column">
+                  <div class="member-arrow" aria-hidden="true">↓</div>
+                  <div class="topology-node">
+                    <strong>Member cluster B</strong>
+                    <ul class="member-list">
+                      <li>Application workload and global Service</li>
+                      <li>Generated regional Gateway and route copies</li>
+                      <li>Application Network data plane</li>
+                      <li>Regional Azure load balancer</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="topology-branch">
+              <div class="down-arrow" aria-hidden="true">↓</div>
+              <div class="placement-label">Creates the Azure load-balancing infrastructure</div>
+              <div class="topology-node azure-resources">
+                <strong>Azure global resources</strong>
+                <ul class="member-list">
+                  <li>One global public IP</li>
+                  <li>Azure global load balancer</li>
+                  <li>Health probes and load-balancing rules</li>
+                  <li>Links to each regional load balancer frontend</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="control-plane">
+      <div class="section-head">
+        <p class="kicker">3. Control plane</p>
+        <h2>The controller builds and maintains the topology</h2>
+        <p>Gateway, HTTPRoute, or policy changes start reconciliation. A periodic check also repairs missed events and external changes.</p>
+      </div>
+
+      <ol class="control-flow" aria-label="Controller reconciliation flow">
+        <li><strong>1. Watch intent</strong><span>Read the Gateway, attached routes, and policy.</span></li>
+        <li><strong>2. Resolve Fleet</strong><span>Read the selected member clusters from placement status.</span></li>
+        <li><strong>3. Validate Services</strong><span>Confirm that route backends use the required global Service and waypoint configuration.</span></li>
+        <li><strong>4. Create regional L7</strong><span>Create child Gateways and HTTPRoute copies through Fleet.</span></li>
+        <li><strong>5. Program Azure</strong><span>Create the global IP, load balancer, probes, and regional backends.</span></li>
+        <li><strong>6. Publish status</strong><span>Write the global IP and conditions to the source Gateway.</span></li>
+      </ol>
+    </section>
+
+    <section id="responsibilities">
+      <div class="section-head">
+        <p class="kicker">4. Component responsibilities</p>
+        <h2>Each component has one job</h2>
+        <p>The design separates cluster placement, L7 routing, Service failover, and global region selection.</p>
+      </div>
+
+      <div class="card-grid">
+        <article class="card"><span class="card-icon">C</span><h3>GLB Gateway Controller</h3><p>Connects Gateway API, Fleet, Application Network, and Azure. It creates regional L7 intent and publishes Gateway status.</p></article>
+        <article class="card"><span class="card-icon">F</span><h3>AKS Fleet</h3><p>Defines the cluster group. It places the workload and generated Gateway resources on the same members.</p></article>
+        <article class="card"><span class="card-icon">N</span><h3>Application Network</h3><p>Provides managed Istio Gateway classes and cross-cluster Service discovery. It selects a remote endpoint when needed.</p></article>
+        <article class="card"><span class="card-icon">GLB</span><h3>Azure global load balancer</h3><p>Provides one anycast public IP. It selects a healthy regional frontend.</p></article>
+        <article class="card"><span class="card-icon">L7</span><h3>Regional Gateway</h3><p>Applies the copied listeners and HTTPRoutes. It sends traffic to the Application Network Service.</p></article>
+        <article class="card"><span class="card-icon">U</span><h3>Application owner</h3><p>Defines the workload placement, Gateway, HTTPRoutes, policy, Services, readiness probes, and TLS material.</p></article>
+      </div>
+    </section>
+
+    <section id="use-cases">
+      <div class="section-head">
+        <p class="kicker">5. Use cases</p>
+        <h2>Use one endpoint across several failure domains</h2>
+        <p>A global Gateway is useful when one application runs in several AKS regions.</p>
+      </div>
+
+      <div class="card-grid">
+        <article class="card"><span class="card-icon">↘</span><h3>Lower client latency</h3><p>The anycast IP sends a new connection to a nearby healthy Azure region.</p></article>
+        <article class="card"><span class="card-icon">HA</span><h3>Multi-cluster availability</h3><p>Traffic can use another regional frontend when one cluster or ingress is unavailable.</p></article>
+        <article class="card"><span class="card-icon">S</span><h3>Service endpoint failover</h3><p>Traffic can use ready application pods in another member cluster when local pods are unavailable.</p></article>
+        <article class="card"><span class="card-icon">DNS</span><h3>Stable DNS and IP</h3><p>DNS points to one global IP. Regional cluster changes do not require a DNS change.</p></article>
+        <article class="card"><span class="card-icon">↻</span><h3>Regional maintenance</h3><p>Drain or replace one regional cluster while other regions continue to serve traffic.</p></article>
+        <article class="card"><span class="card-icon">API</span><h3>One routing API</h3><p>Application teams use Gateway API. The controller manages the Azure and Fleet resources.</p></article>
+      </div>
+
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner">
+      <span>Azure Global Load Balancer Gateway Controller</span>
+      <span>Gateway API · AKS Fleet · Application Network</span>
+    </div>
+  </footer>
+</body>
+</html>

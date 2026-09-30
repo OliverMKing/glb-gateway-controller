@@ -1,0 +1,37 @@
+apiVersion: placement.kubernetes-fleet.io/v1alpha1
+kind: ResourceOverride
+metadata:
+  name: global-demo-regions
+  namespace: global-demo
+spec:
+  placement:
+    name: global-demo-workload
+    scope: Cluster
+  resourceSelectors:
+  - group: apps
+    version: v1
+    kind: Deployment
+    name: global-demo
+  policy:
+    overrideRules:
+    - clusterSelector:
+        clusterSelectorTerms:
+        - labelSelector:
+            matchLabels:
+              kubernetes-fleet.io/member-name: MEMBER_CLUSTER_EAST
+      jsonPatchOverrides:
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: REGION_EAST
+      - op: replace
+        path: /spec/replicas
+        value: 0
+    - clusterSelector:
+        clusterSelectorTerms:
+        - labelSelector:
+            matchLabels:
+              kubernetes-fleet.io/member-name: MEMBER_CLUSTER_WEST
+      jsonPatchOverrides:
+      - op: replace
+        path: /spec/template/spec/containers/0/env/0/value
+        value: REGION_WEST
