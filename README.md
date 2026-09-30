@@ -24,6 +24,10 @@ Services labeled `istio.io/global=true` can fall back through the managed
 east-west data plane when one member has no ready local endpoints. For each
 route backend, the controller creates an Istio `DestinationRule` that prefers
 endpoints in the ingress cluster and uses remote endpoints only when needed.
+The outlier policy can eject at most 99 percent of a pool. A regional ingress
+has one waypoint upstream, so it cannot eject that waypoint and return
+`no healthy upstream`. A waypoint with several Service endpoints can still
+eject unhealthy endpoints and use a healthy remote endpoint.
 The demo uses external Application Network east-west gateways so the two AKS
 virtual networks do not need peering. Application Network protects this path
 with mutual TLS.

@@ -168,7 +168,9 @@ func LocalityDestinationRules(sourceGateway *gwv1.Gateway, routes []*gwv1.HTTPRo
 						Consecutive_5XxErrors: wrapperspb.UInt32(5),
 						Interval:              durationpb.New(2 * time.Second),
 						BaseEjectionTime:      durationpb.New(30 * time.Second),
-						MaxEjectionPercent:    100,
+						// Keep at least one host. A regional ingress has one waypoint
+						// upstream, so it cannot eject the complete upstream pool.
+						MaxEjectionPercent: 99,
 					},
 				},
 			},

@@ -582,7 +582,9 @@ sets `istio.io/global="true"`. Application Network synchronizes discovery for
 that Service across its members. The regional Gateway still resolves the local
 Service identity. For each unique Service backend, the controller creates an
 Istio `DestinationRule` that enables locality load balancing and outlier
-detection. Istio prefers endpoints in the ingress cluster while they are
+detection. The rule limits endpoint ejection to 99 percent of an upstream pool.
+The regional ingress has one waypoint upstream, so Envoy cannot eject that
+waypoint. Istio prefers endpoints in the ingress cluster while they are
 healthy. If local endpoints are not available, Application Network can select
 remote endpoints. Cross-cluster requests traverse the source and destination
 east-west gateways with mTLS.
@@ -623,10 +625,12 @@ zero ready local endpoints, requests arriving at that member can be sent to
 available endpoints in another member. The controller does not need to remove
 the regional frontend from the global load balancer for this case.
 
-This does not make every failure automatically recoverable. The generated
-outlier policy can eject an endpoint after repeated `5xx` responses, but it
-does not replace accurate startup, readiness, and liveness probes. Retry and
-timeout behavior remain application or platform policy.
+This does not make every failure recoverable. The generated outlier policy can
+eject a Service endpoint after repeated `5xx` responses. The 99-percent limit
+keeps at least one host in each pool. It prevents a regional ingress from
+ejecting its only waypoint upstream. Accurate startup, readiness, and liveness
+probes are still required. Retry and timeout behavior remain application or
+platform policy.
 
 The recommended resilient edge-ingress model is:
 
@@ -733,7 +737,8 @@ Consequences:
   is excluded from the desired global pool and reports `Reachable=False`.
 - Loss of ready local Service endpoints does not require GLB removal: the
   regional proxy can use Application Network to reach ready remote endpoints.
-- The generated outlier policy ejects endpoints after repeated `5xx` responses.
+- The generated outlier policy ejects Service endpoints after repeated `5xx`
+  responses. Its 99-percent limit keeps at least one host in each pool.
   Readiness probes remain the primary health signal.
 - Cross-cluster fallback requires healthy east-west gateways and network
   reachability; it can add inter-region latency and data-transfer cost.
@@ -750,7 +755,7 @@ infrastructure, while Application Network handles Service endpoint selection.
 | Existing Service is deleted from Fleet placement | Eventually, through controller reconciliation | Fleet publishes a new snapshot/apply state, then the controller removes the Azure backend. This is a control-plane operation with no sub-second or fixed failover guarantee. |
 | One member's Service has zero ready local endpoints | No; removal is unnecessary | Application Network routes to available endpoints in another member through the east-west data plane. In the validated two-region demo, east had zero pods and zero ready endpoints, its regional ingress returned a response from west, and the global VIP returned 30/30 successful responses from west. This measurement is not an SLA. |
 | All members have zero ready endpoints | No | No healthy backend exists; the regional gateways can return `503` even though the ingress frontends remain healthy. |
-| Pods remain Ready but return repeated `5xx` responses | No | The generated outlier policy can eject the endpoint after five consecutive errors. Fix the readiness probe because ejection is temporary. |
+| Pods remain Ready but return repeated `5xx` responses | No | The policy can eject an endpoint after five consecutive errors, but it keeps at least one host in the pool. Fix the readiness probe because ejection is temporary. |
 | East-west path fails while the selected region has no local endpoints | No | Cross-cluster fallback fails; surface Application Network degradation. |
 | Regional gateway/Azure LB backend becomes unhealthy | Yes | With typical AKS defaults of a 5-second probe interval and two failed probes, regional detection is about 10 seconds. The global load balancer samples regional availability every 5 seconds, so new-flow failover is generally expected on the order of 10-20 seconds, not as a formal SLA. |
 | Regional load balancer availability is already zero | Yes | The global layer's next 5-second availability check can remove it from rotation. |

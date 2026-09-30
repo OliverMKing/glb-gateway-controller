@@ -620,8 +620,9 @@
         <p>
           Azure selects a healthy regional frontend. The regional Istio
           Gateway applies the HTTPRoute. The controller's locality policy
-          prefers a ready Service endpoint in that cluster. Application
-          Network can use another Fleet member when no local endpoint is ready.
+          prefers a ready Service endpoint in that cluster and keeps at least
+          one upstream available. Application Network can use another Fleet
+          member when no local endpoint is ready.
         </p>
       </div>
 
@@ -781,7 +782,7 @@ spec:
                 <ul class="member-list">
                   <li>Regional <code>istio</code> Gateway</li>
                   <li>Attached HTTPRoute copies</li>
-                  <li>Local-first DestinationRule</li>
+                  <li>Safe local-first DestinationRule</li>
                   <li>Fleet ResourcePlacement</li>
                 </ul>
               </div>
@@ -847,7 +848,7 @@ spec:
         <li><strong>1. Watch intent</strong><span>Read the Gateway, attached routes, and policy.</span></li>
         <li><strong>2. Resolve Fleet</strong><span>Read the selected member clusters from placement status.</span></li>
         <li><strong>3. Validate Services</strong><span>Confirm that route backends use the required global Service and waypoint configuration.</span></li>
-        <li><strong>4. Create regional L7</strong><span>Create child Gateways, HTTPRoute copies, and local-first Service policy through Fleet.</span></li>
+        <li><strong>4. Create regional L7</strong><span>Create child Gateways, HTTPRoute copies, and a safe local-first Service policy through Fleet.</span></li>
         <li><strong>5. Program Azure</strong><span>Create the global IP, load balancer, probes, and regional backends.</span></li>
         <li><strong>6. Publish status</strong><span>Write the global IP and conditions to the source Gateway.</span></li>
       </ol>

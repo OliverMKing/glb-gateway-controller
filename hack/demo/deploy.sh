@@ -319,6 +319,23 @@ wait_for_local_first() {
   die "regional frontend for $member_name did not prefer $expected_region"
 }
 
+# Keep one upstream in every pool, including the ingress's one-waypoint pool.
+wait_for_safe_outlier_policy() {
+  local hub_policy east_policy west_policy
+  for _ in $(seq 1 120); do
+    hub_policy="$(KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get destinationrules -o json 2>/dev/null | jq -r '[.items[0].spec.trafficPolicy.outlierDetection.maxEjectionPercent, (.items[0].spec.workloadSelector == null)] | @tsv' || true)"
+    east_policy="$(KUBECONFIG="$EAST_KUBECONFIG" kubectl -n global-demo get destinationrules -o json 2>/dev/null | jq -r '[.items[0].spec.trafficPolicy.outlierDetection.maxEjectionPercent, (.items[0].spec.workloadSelector == null)] | @tsv' || true)"
+    west_policy="$(KUBECONFIG="$WEST_KUBECONFIG" kubectl -n global-demo get destinationrules -o json 2>/dev/null | jq -r '[.items[0].spec.trafficPolicy.outlierDetection.maxEjectionPercent, (.items[0].spec.workloadSelector == null)] | @tsv' || true)"
+    printf 'safe outlier policy hub=%q east=%q west=%q\n' \
+      "${hub_policy:-pending}" "${east_policy:-pending}" "${west_policy:-pending}"
+    if [[ "$hub_policy" == $'99\ttrue' && "$east_policy" == $'99\ttrue' && "$west_policy" == $'99\ttrue' ]]; then
+      return 0
+    fi
+    sleep 10
+  done
+  die "locality policy did not preserve one healthy upstream"
+}
+
 require_command az
 require_command curl
 require_command kubectl
@@ -679,6 +696,9 @@ sed \
 GLOBAL_IP="$(wait_for_global_address)"
 
 # Fleet can still be rolling out the generated locality policy after Azure is ready.
+log "Verifying safe outlier ejection limits"
+wait_for_safe_outlier_policy
+
 log "Verifying local-first routing at both regional frontends"
 wait_for_local_first "$EAST_MEMBER" "$EAST_REGION"
 wait_for_local_first "$WEST_MEMBER" "$WEST_REGION"

@@ -105,7 +105,7 @@ func TestLocalityDestinationRules(t *testing.T) {
 	if policy == nil || policy.LoadBalancer == nil || policy.LoadBalancer.LocalityLbSetting == nil || !policy.LoadBalancer.LocalityLbSetting.Enabled.GetValue() {
 		t.Fatalf("locality policy is not enabled: %#v", policy)
 	}
-	if policy.OutlierDetection == nil || policy.OutlierDetection.Consecutive_5XxErrors.GetValue() != 5 || policy.OutlierDetection.MaxEjectionPercent != 100 {
+	if policy.OutlierDetection == nil || policy.OutlierDetection.Consecutive_5XxErrors.GetValue() != 5 || policy.OutlierDetection.MaxEjectionPercent != 99 {
 		t.Fatalf("outlier detection = %#v", policy.OutlierDetection)
 	}
 	if got := policy.OutlierDetection.Interval.AsDuration(); got != 2*time.Second {

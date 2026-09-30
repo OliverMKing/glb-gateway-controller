@@ -483,9 +483,11 @@ KUBECONFIG="$EAST_KUBECONFIG" kubectl -n global-demo get destinationrules
 KUBECONFIG="$WEST_KUBECONFIG" kubectl -n global-demo get destinationrules
 ```
 
-The generated policy enables Istio locality load balancing. It also enables
-outlier detection so Istio can use healthy remote endpoints when the local
-endpoints are not available. The policy does not contain a fixed region list.
+The generated policy enables Istio locality load balancing and outlier
+detection. It limits ejection to 99 percent of each upstream pool. The regional
+ingress has one waypoint upstream, so Envoy cannot eject that waypoint. The
+waypoint can eject unhealthy Service endpoints and use a healthy remote
+endpoint. The policy does not contain a fixed region list.
 
 The controller also TCP-probes all listener ports before enrolling a regional
 frontend. Per-member policy status should contain `Reachable=True`:
