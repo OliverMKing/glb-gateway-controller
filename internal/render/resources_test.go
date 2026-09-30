@@ -2,6 +2,7 @@ package render
 
 import (
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -69,9 +70,45 @@ func TestChildGatewayAndRouteCopies(t *testing.T) {
 }
 
 func TestCompanionResourcePlacementIsDeterministic(t *testing.T) {
-	placement := CompanionResourcePlacement("apps", "web", []string{"west", "east"}, "web-child", []string{"route-b", "route-a"})
+	placement := CompanionResourcePlacement("apps", "web", []string{"west", "east"}, "web-child", []string{"route-b", "route-a"}, []string{"backend-locality"})
 	clusters := placement.Spec.Policy.ClusterNames
 	if len(clusters) != 2 || clusters[0] != "east" || clusters[1] != "west" {
 		t.Fatalf("clusterNames = %v", clusters)
+	}
+	selectors := placement.Spec.ResourceSelectors
+	if len(selectors) != 4 || selectors[3].Group != "networking.istio.io" || selectors[3].Kind != "DestinationRule" || selectors[3].Name != "backend-locality" {
+		t.Fatalf("DestinationRule selector = %#v", selectors)
+	}
+}
+
+func TestLocalityDestinationRules(t *testing.T) {
+	uid := types.UID("7d1a8f9f")
+	source := &gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "apps", UID: uid}}
+	backendNamespace := gwv1.Namespace("backends")
+	routes := []*gwv1.HTTPRoute{{
+		ObjectMeta: metav1.ObjectMeta{Name: "route", Namespace: "apps"},
+		Spec: gwv1.HTTPRouteSpec{Rules: []gwv1.HTTPRouteRule{{BackendRefs: []gwv1.HTTPBackendRef{
+			{BackendRef: gwv1.BackendRef{BackendObjectReference: gwv1.BackendObjectReference{Name: "store", Namespace: &backendNamespace}}},
+			{BackendRef: gwv1.BackendRef{BackendObjectReference: gwv1.BackendObjectReference{Name: "store", Namespace: &backendNamespace}}},
+		}}}},
+	}}
+
+	rules := LocalityDestinationRules(source, routes)
+	if len(rules) != 1 {
+		t.Fatalf("got %d rules, want one per unique Service", len(rules))
+	}
+	rule := rules[0]
+	if rule.Namespace != "apps" || rule.Spec.Host != "store.backends.svc.cluster.local" {
+		t.Fatalf("unexpected DestinationRule identity: %#v", rule)
+	}
+	policy := rule.Spec.TrafficPolicy
+	if policy == nil || policy.LoadBalancer == nil || policy.LoadBalancer.LocalityLbSetting == nil || !policy.LoadBalancer.LocalityLbSetting.Enabled.GetValue() {
+		t.Fatalf("locality policy is not enabled: %#v", policy)
+	}
+	if policy.OutlierDetection == nil || policy.OutlierDetection.Consecutive_5XxErrors.GetValue() != 5 || policy.OutlierDetection.MaxEjectionPercent != 100 {
+		t.Fatalf("outlier detection = %#v", policy.OutlierDetection)
+	}
+	if got := policy.OutlierDetection.Interval.AsDuration(); got != 2*time.Second {
+		t.Fatalf("outlier interval = %s", got)
 	}
 }

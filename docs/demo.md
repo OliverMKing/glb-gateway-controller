@@ -7,7 +7,7 @@ Azure Global Load Balancer public IP
   -> eastus2 or westus3 regional Azure Load Balancer
   -> Application Network Istio ingress Gateway
   -> global Service and waypoint
-  -> ready workload in either region
+  -> ready workload in the local region, or a remote region during failover
 ```
 
 The demo uses AKS Fleet as the only cluster inventory and placement authority.
@@ -35,10 +35,11 @@ The script is intentionally end to end. It:
 5. Builds the controller in ACR and runs it in the east member cluster.
 6. Places the global Service, waypoint, and `hello from <region>` workloads.
 7. Applies the global Gateway, HTTPRoute, and `GlobalGatewayPolicy`.
-8. Waits for both regional frontends and the global VIP, then curls the VIP.
+8. Verifies local-first routing at both regional frontends, then curls the
+   global VIP.
 
-The command exits successfully only after the response is either
-`hello from eastus2` or `hello from westus3`.
+The command exits successfully only after each regional frontend returns ten
+local responses and the global VIP returns a regional response.
 
 Common overrides are environment variables:
 
@@ -300,9 +301,10 @@ service principal has these Azure permissions:
 - `Reader` and `Network Contributor` on the demo resource group.
 - `Network Contributor` on each AKS node resource group.
 
-It also installs Gateway API v1.4.1 CRDs on the hub and grants lease access for
-controller-runtime leader election. See `hack/demo/deploy.sh` for the exact,
-idempotent commands.
+It also installs Gateway API v1.4.1 and Istio CRDs on the hub. The controller
+stages generated `DestinationRule` resources on the hub before Fleet places
+them. The script also grants lease access for controller-runtime leader
+election. See `hack/demo/deploy.sh` for the exact, idempotent commands.
 
 The Deployment uses the ACR image digest. It does not depend on a mutable image
 tag or a cached node image.
@@ -372,10 +374,11 @@ hello from eastus2
 hello from westus3
 ```
 
-Because `global-demo` is deliberately an Application Network global Service,
-a request entering the east regional gateway can be served in west, and vice
-versa. The response identifies the workload region, not necessarily the
-ingress region.
+Because `global-demo` is an Application Network global Service, it has
+endpoints in both clusters. The controller creates a local-first
+`DestinationRule` for the Service. A healthy east regional gateway uses east
+pods, and a healthy west regional gateway uses west pods. If a region has no
+ready local pods, Application Network can use ready pods in the other region.
 
 Watch Fleet, Gateway, and policy status until both members are ready:
 
@@ -459,14 +462,30 @@ KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get \
 ```
 
 Use `az network public-ip show --ids <resource-id>` to resolve each ID to its
-address, then test it. All three endpoints should return a region-labelled
-response:
+address, then test it. While both workloads are healthy, each regional entry
+point must return its local region:
 
 ```bash
 curl --fail --show-error "http://$EAST_REGIONAL_IP"
+# hello from eastus2
+
 curl --fail --show-error "http://$WEST_REGIONAL_IP"
+# hello from westus3
+
 curl --fail --show-error "http://$GLOBAL_IP"
+# hello from the region that Azure selected
 ```
+
+The controller-generated policy is also present in each member:
+
+```bash
+KUBECONFIG="$EAST_KUBECONFIG" kubectl -n global-demo get destinationrules
+KUBECONFIG="$WEST_KUBECONFIG" kubectl -n global-demo get destinationrules
+```
+
+The generated policy enables Istio locality load balancing. It also enables
+outlier detection so Istio can use healthy remote endpoints when the local
+endpoints are not available. The policy does not contain a fixed region list.
 
 The controller also TCP-probes all listener ports before enrolling a regional
 frontend. Per-member policy status should contain `Reachable=True`:
@@ -549,6 +568,9 @@ The live validation on 2026-09-30 used two two-node AKS clusters in `eastus2`
 and `westus3`, one Fleet hub, and one Application Network:
 
 - Both regional Gateway Azure rules reported `enableFloatingIP=false`.
+- The east regional IP returned east for 40/40 requests, and the west regional
+  IP returned west for 40/40 requests while both workloads were healthy.
+- The global IP returned west for 40/40 requests from the validation client.
 - The global public IP returned HTTP 200 repeatedly.
 - With east at zero pods and zero ready EndpointSlice endpoints, the east
   regional IP returned a successful response from west.

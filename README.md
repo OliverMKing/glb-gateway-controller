@@ -21,7 +21,9 @@ requires the stable `placement.kubernetes-fleet.io/v1` and
 `cluster.kubernetes-fleet.io/v1` APIs.
 Every selected AKS cluster must also be joined to the same Application Network.
 Services labeled `istio.io/global=true` can fall back through the managed
-east-west data plane when one member has no ready local endpoints.
+east-west data plane when one member has no ready local endpoints. For each
+route backend, the controller creates an Istio `DestinationRule` that prefers
+endpoints in the ingress cluster and uses remote endpoints only when needed.
 The demo uses external Application Network east-west gateways so the two AKS
 virtual networks do not need peering. Application Network protects this path
 with mutual TLS.
@@ -51,7 +53,9 @@ Application Network, ACR, scoped controller identity, and Azure networking. It
 installs the controller API and RBAC on the Fleet hub, runs the controller in
 one member cluster, places region-labelled backing services, applies the global
 Gateway and HTTPRoute, and exits only after the global public IP returns
-`hello from eastus2` or `hello from westus3`.
+`hello from eastus2` or `hello from westus3`. It also sends ten requests to
+each regional frontend and verifies that every response comes from that
+frontend's region while both regions are healthy.
 The controller Deployment uses the exact ACR image digest, and the script waits
 for the policy `Accepted`, `MembersReady`, and `AzureResourcesReady` conditions.
 

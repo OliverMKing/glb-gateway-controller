@@ -283,6 +283,42 @@ wait_for_global_address() {
   die "global address did not become ready"
 }
 
+# Confirm that each healthy regional ingress uses its local application pods.
+wait_for_local_first() {
+  local member_name="$1"
+  local expected_region="$2"
+  local public_ip_id address response local_count
+  for _ in $(seq 1 120); do
+    public_ip_id="$(KUBECONFIG="$HUB_KUBECONFIG" kubectl -n global-demo get \
+      globalgatewaypolicy global-demo -o json | jq -r \
+      --arg member "$member_name" '.status.members[]? | select(.name == $member) | .regionalPublicIPAddressID' 2>/dev/null || true)"
+    address=""
+    if [[ -n "$public_ip_id" ]]; then
+      address="$(az network public-ip show --ids "$public_ip_id" --query ipAddress -o tsv 2>/dev/null || true)"
+    fi
+
+    local_count=0
+    if [[ -n "$address" ]]; then
+      for _ in $(seq 1 10); do
+        response="$(curl --silent --show-error --connect-timeout 5 --max-time 10 \
+          "http://$address" 2>/dev/null || true)"
+        if [[ "$response" != "hello from $expected_region" ]]; then
+          break
+        fi
+        local_count=$((local_count + 1))
+      done
+    fi
+
+    printf 'regional locality member=%s address=%s local-responses=%s/10\n' \
+      "$member_name" "${address:-pending}" "$local_count"
+    if [[ "$local_count" == "10" ]]; then
+      return 0
+    fi
+    sleep 10
+  done
+  die "regional frontend for $member_name did not prefer $expected_region"
+}
+
 require_command az
 require_command curl
 require_command kubectl
@@ -313,6 +349,7 @@ CONTROLLER_IMAGE_TAG="${CONTROLLER_IMAGE_TAG:-demo}"
 CONTROLLER_SP_NAME="${CONTROLLER_SP_NAME:-${RESOURCE_GROUP}-controller}"
 SKIP_CONTROLLER_IMAGE_BUILD="${SKIP_CONTROLLER_IMAGE_BUILD:-false}"
 APPNET_EXTENSION_VERSION="${APPNET_EXTENSION_VERSION:-1.0.0b4}"
+ISTIO_CRD_VERSION="${ISTIO_CRD_VERSION:-1.29.8}"
 SERVICE_MANAGEMENT_REFERENCE="${SERVICE_MANAGEMENT_REFERENCE:-}"
 
 [[ "$SKIP_CONTROLLER_IMAGE_BUILD" == "true" || "$SKIP_CONTROLLER_IMAGE_BUILD" == "false" ]] || \
@@ -554,6 +591,8 @@ ensure_role_assignment "$CONTROLLER_PRINCIPAL_ID" "Network Contributor" "$WEST_N
 log "Installing controller APIs and RBAC on the Fleet hub"
 KUBECONFIG="$HUB_KUBECONFIG" kubectl apply -f \
   https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
+KUBECONFIG="$HUB_KUBECONFIG" kubectl apply -f \
+  "https://raw.githubusercontent.com/istio/istio/${ISTIO_CRD_VERSION}/manifests/charts/base/files/crd-all.gen.yaml"
 KUBECONFIG="$HUB_KUBECONFIG" kubectl create namespace "$CONTROLLER_NAMESPACE" \
   --dry-run=client -o yaml | KUBECONFIG="$HUB_KUBECONFIG" kubectl apply -f -
 KUBECONFIG="$HUB_KUBECONFIG" kubectl -n "$CONTROLLER_NAMESPACE" create serviceaccount "$CONTROLLER_SERVICE_ACCOUNT" \
@@ -638,6 +677,11 @@ sed \
   KUBECONFIG="$HUB_KUBECONFIG" kubectl apply -f -
 
 GLOBAL_IP="$(wait_for_global_address)"
+
+# Fleet can still be rolling out the generated locality policy after Azure is ready.
+log "Verifying local-first routing at both regional frontends"
+wait_for_local_first "$EAST_MEMBER" "$EAST_REGION"
+wait_for_local_first "$WEST_MEMBER" "$WEST_REGION"
 
 # Azure data-plane propagation can lag ARM success, so curl with bounded retries.
 log "Waiting for the Azure Global Load Balancer data plane at $GLOBAL_IP"

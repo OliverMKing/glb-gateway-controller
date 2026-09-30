@@ -619,8 +619,9 @@
         <h2>Traffic follows one clear path</h2>
         <p>
           Azure selects a healthy regional frontend. The regional Istio
-          Gateway applies the HTTPRoute. Application Network selects a ready
-          Service endpoint in the same cluster or another Fleet member.
+          Gateway applies the HTTPRoute. The controller's locality policy
+          prefers a ready Service endpoint in that cluster. Application
+          Network can use another Fleet member when no local endpoint is ready.
         </p>
       </div>
 
@@ -780,11 +781,12 @@ spec:
                 <ul class="member-list">
                   <li>Regional <code>istio</code> Gateway</li>
                   <li>Attached HTTPRoute copies</li>
+                  <li>Local-first DestinationRule</li>
                   <li>Fleet ResourcePlacement</li>
                 </ul>
               </div>
               <div class="down-arrow" aria-hidden="true">↓</div>
-              <div class="placement-label">Fleet places the Gateway and route resources</div>
+              <div class="placement-label">Fleet places the Gateway, route, and DestinationRule resources</div>
               <div class="member-grid">
                 <div class="member-column">
                   <div class="member-arrow" aria-hidden="true">↓</div>
@@ -792,7 +794,9 @@ spec:
                     <strong>Member cluster A</strong>
                     <ul class="member-list">
                       <li>Application workload and global Service</li>
-                      <li>Generated regional Gateway and route copies</li>
+                      <li>Generated regional Gateway</li>
+                      <li>Generated HTTPRoute copies</li>
+                      <li>Generated local-first <code>DestinationRule</code></li>
                       <li>Application Network data plane</li>
                       <li>Regional Azure load balancer</li>
                     </ul>
@@ -804,7 +808,9 @@ spec:
                     <strong>Member cluster B</strong>
                     <ul class="member-list">
                       <li>Application workload and global Service</li>
-                      <li>Generated regional Gateway and route copies</li>
+                      <li>Generated regional Gateway</li>
+                      <li>Generated HTTPRoute copies</li>
+                      <li>Generated local-first <code>DestinationRule</code></li>
                       <li>Application Network data plane</li>
                       <li>Regional Azure load balancer</li>
                     </ul>
@@ -841,7 +847,7 @@ spec:
         <li><strong>1. Watch intent</strong><span>Read the Gateway, attached routes, and policy.</span></li>
         <li><strong>2. Resolve Fleet</strong><span>Read the selected member clusters from placement status.</span></li>
         <li><strong>3. Validate Services</strong><span>Confirm that route backends use the required global Service and waypoint configuration.</span></li>
-        <li><strong>4. Create regional L7</strong><span>Create child Gateways and HTTPRoute copies through Fleet.</span></li>
+        <li><strong>4. Create regional L7</strong><span>Create child Gateways, HTTPRoute copies, and local-first Service policy through Fleet.</span></li>
         <li><strong>5. Program Azure</strong><span>Create the global IP, load balancer, probes, and regional backends.</span></li>
         <li><strong>6. Publish status</strong><span>Write the global IP and conditions to the source Gateway.</span></li>
       </ol>
@@ -855,9 +861,9 @@ spec:
       </div>
 
       <div class="card-grid">
-        <article class="card"><span class="card-icon">C</span><h3>GLB Gateway Controller</h3><p>Connects Gateway API, Fleet, Application Network, and Azure. It creates regional L7 intent and publishes Gateway status.</p></article>
+        <article class="card"><span class="card-icon">C</span><h3>GLB Gateway Controller</h3><p>Connects Gateway API, Fleet, Application Network, and Azure. It creates regional L7 intent, adds local-first Service policy, and publishes Gateway status.</p></article>
         <article class="card"><span class="card-icon">F</span><h3>AKS Fleet</h3><p>Defines the cluster group. It places the workload and generated Gateway resources on the same members.</p></article>
-        <article class="card"><span class="card-icon">N</span><h3>Application Network</h3><p>Provides managed Istio Gateway classes and cross-cluster Service discovery. It selects a remote endpoint when needed.</p></article>
+        <article class="card"><span class="card-icon">N</span><h3>Application Network</h3><p>Provides managed Istio Gateway classes and cross-cluster Service discovery. It carries traffic to a remote endpoint when local endpoints are not available.</p></article>
         <article class="card"><span class="card-icon">GLB</span><h3>Azure global load balancer</h3><p>Provides one anycast public IP. It selects a healthy regional frontend.</p></article>
         <article class="card"><span class="card-icon">L7</span><h3>Regional Gateway</h3><p>Applies the copied listeners and HTTPRoutes. It sends traffic to the Application Network Service.</p></article>
         <article class="card"><span class="card-icon">U</span><h3>Application owner</h3><p>Defines the workload placement, Gateway, HTTPRoutes, policy, Services, readiness probes, and TLS material.</p></article>
@@ -892,7 +898,7 @@ spec:
       <div class="card-grid">
         <article class="card"><span class="card-icon">1</span><h3>Reuse existing components</h3><p>AKS Fleet, Application Network, Gateway API, Istio, and Azure global load balancing already provide the main building blocks. Only the integration controller is new. We can improve the controller as these components develop.</p></article>
         <article class="card"><span class="card-icon">2</span><h3>Keep regional configuration consistent</h3><p>The Gateway and HTTPRoutes in the Fleet hub are the single source of truth. The controller creates the regional Gateway configuration from that source, so separate regional configurations cannot drift.</p></article>
-        <article class="card"><span class="card-icon">3</span><h3>Handle missing regional upstreams</h3><p>A regional Gateway can be healthy when its local Service has no ready pods. Application Network uses its east-west data plane to send the request to a ready Service endpoint in another member cluster.</p></article>
+        <article class="card"><span class="card-icon">3</span><h3>Handle missing regional upstreams</h3><p>The controller prefers local Service endpoints. If a regional Service has no ready local pods, Application Network uses its east-west data plane to reach a ready endpoint in another member cluster.</p></article>
       </div>
     </section>
   </main>

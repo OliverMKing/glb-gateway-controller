@@ -580,9 +580,16 @@ rules:
 The workload placement creates the same namespaced Service in every member and
 sets `istio.io/global="true"`. Application Network synchronizes discovery for
 that Service across its members. The regional Gateway still resolves the local
-Service identity, but the Application Network data plane can select available
-local or remote endpoints. Cross-cluster requests traverse the source and
-destination east-west gateways with mTLS.
+Service identity. For each unique Service backend, the controller creates an
+Istio `DestinationRule` that enables locality load balancing and outlier
+detection. Istio prefers endpoints in the ingress cluster while they are
+healthy. If local endpoints are not available, Application Network can select
+remote endpoints. Cross-cluster requests traverse the source and destination
+east-west gateways with mTLS.
+
+The controller does not create a fixed failover region list. Istio uses the
+locality metadata that Application Network supplies. This keeps the policy
+valid when Fleet adds, removes, or replaces a region.
 
 Users apply the global Gateway and HTTPRoute once on the Fleet hub. The
 controller stages the regional child Gateway and renamed route copies, and
@@ -616,17 +623,17 @@ zero ready local endpoints, requests arriving at that member can be sent to
 available endpoints in another member. The controller does not need to remove
 the regional frontend from the global load balancer for this case.
 
-This does not make every failure automatically recoverable. If a pod remains
-Ready while returning `5xx`, it can still receive traffic. Applications need
-accurate startup, readiness, and liveness probes. Retry, timeout, and outlier
-behavior must be an explicit, separately validated service policy rather than
-an assumption made by the GLB controller.
+This does not make every failure automatically recoverable. The generated
+outlier policy can eject an endpoint after repeated `5xx` responses, but it
+does not replace accurate startup, readiness, and liveness probes. Retry and
+timeout behavior remain application or platform policy.
 
 The recommended resilient edge-ingress model is:
 
 ```text
 Azure global LB -> regional Application Network Gateway -> global Service
-                -> local endpoint OR east-west gateway -> remote endpoint
+                -> preferred local endpoint
+                -> east-west gateway -> remote endpoint when local is unavailable
 ```
 
 The Multicluster Services API is not required for this MVP. Application Network
@@ -726,8 +733,8 @@ Consequences:
   is excluded from the desired global pool and reports `Reachable=False`.
 - Loss of ready local Service endpoints does not require GLB removal: the
   regional proxy can use Application Network to reach ready remote endpoints.
-- A pod that remains Ready while returning application errors is still eligible
-  until readiness, retry, or explicitly configured L7 policy changes that.
+- The generated outlier policy ejects endpoints after repeated `5xx` responses.
+  Readiness probes remain the primary health signal.
 - Cross-cluster fallback requires healthy east-west gateways and network
   reachability; it can add inter-region latency and data-transfer cost.
 - Failover applies to new flows. Existing TCP connections can be interrupted.
@@ -743,7 +750,7 @@ infrastructure, while Application Network handles Service endpoint selection.
 | Existing Service is deleted from Fleet placement | Eventually, through controller reconciliation | Fleet publishes a new snapshot/apply state, then the controller removes the Azure backend. This is a control-plane operation with no sub-second or fixed failover guarantee. |
 | One member's Service has zero ready local endpoints | No; removal is unnecessary | Application Network routes to available endpoints in another member through the east-west data plane. In the validated two-region demo, east had zero pods and zero ready endpoints, its regional ingress returned a response from west, and the global VIP returned 30/30 successful responses from west. This measurement is not an SLA. |
 | All members have zero ready endpoints | No | No healthy backend exists; the regional gateways can return `503` even though the ingress frontends remain healthy. |
-| Pods remain Ready but return `5xx` | No | Readiness is a false-positive. Fix probes or add explicitly validated retry/outlier policy. |
+| Pods remain Ready but return repeated `5xx` responses | No | The generated outlier policy can eject the endpoint after five consecutive errors. Fix the readiness probe because ejection is temporary. |
 | East-west path fails while the selected region has no local endpoints | No | Cross-cluster fallback fails; surface Application Network degradation. |
 | Regional gateway/Azure LB backend becomes unhealthy | Yes | With typical AKS defaults of a 5-second probe interval and two failed probes, regional detection is about 10 seconds. The global load balancer samples regional availability every 5 seconds, so new-flow failover is generally expected on the order of 10-20 seconds, not as a formal SLA. |
 | Regional load balancer availability is already zero | Yes | The global layer's next 5-second availability check can remove it from rotation. |
@@ -774,7 +781,8 @@ or write GatewayClass status.
    group from Fleet metadata.
 5. Validate the ambient namespace label, global Service labels, and required
    waypoint resources in the workload placement snapshot.
-6. Stage the child Gateway and route copies on the Fleet hub.
+6. Stage the child Gateway, route copies, and local-first `DestinationRule`
+   resources on the Fleet hub.
 7. Reconcile a companion `ResourcePlacement` using `PickFixed` with the exact
    selected member names.
 8. Publish Fleet scheduling, synchronization, apply, availability, drift, and
@@ -920,6 +928,8 @@ The first usable release includes:
 - Public IPv4.
 - HTTP and HTTPS listeners on TCP ports, initially tested on 80 and 443.
 - Automatic propagation of attached `HTTPRoute` resources.
+- Automatic local-first `DestinationRule` generation for each unique Service
+  backend, with remote endpoint fallback and no fixed region list.
 - Core `Service` backends marked `istio.io/global="true"`, with application
   namespaces enrolled in ambient mode and documented waypoint configuration.
 - Cross-cluster endpoint fallback when one member has no ready local endpoints.
@@ -953,6 +963,10 @@ The validated 2026-09-30 environment proved:
 
 - Both regional Istio Services carried the non-floating-IP annotation and
   their Azure rules reported `enableFloatingIP=false`.
+- With both workloads healthy, the east ingress returned east for 40/40
+  requests and the west ingress returned west for 40/40 requests.
+- The global VIP returned one selected region for 40/40 requests from the
+  validation client.
 - The global VIP served the region-labelled echo workload.
 - With east scaled to zero pods and zero ready EndpointSlice endpoints, the
   east ingress reached west through Application Network for 30/30 requests.

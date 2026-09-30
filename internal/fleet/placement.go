@@ -22,20 +22,28 @@ type Selection struct {
 	Snapshot string
 }
 
-func SelectedMembers(obj placementv1.PlacementObj) (Selection, error) {
+func SelectedMembers(obj placementv1.PlacementObj, previousMembers ...string) (Selection, error) {
 	status := obj.GetPlacementStatus()
 	if status == nil || len(status.PerClusterPlacementStatuses) == 0 {
 		return Selection{}, fmt.Errorf("placement %s has no status.placementStatuses", obj.GetName())
 	}
 
-	// Placement status is the source of truth for the clusters in this global group.
+	// Keep serving from a prior member while Fleet rolls an update to that member.
+	previous := make(map[string]struct{}, len(previousMembers))
+	for _, name := range previousMembers {
+		previous[name] = struct{}{}
+	}
 	members := make([]string, 0, len(status.PerClusterPlacementStatuses))
 	for i := range status.PerClusterPlacementStatuses {
 		clusterStatus := &status.PerClusterPlacementStatuses[i]
 		if clusterStatus.ClusterName == "" {
 			continue
 		}
-		if !conditionTrue(clusterStatus.Conditions, string(placementv1.PerClusterAppliedConditionType)) {
+		applied, appliedReported := conditionState(clusterStatus.Conditions, string(placementv1.PerClusterAppliedConditionType))
+		_, wasPreviouslySelected := previous[clusterStatus.ClusterName]
+		rollingPriorMember := wasPreviouslySelected && !appliedReported &&
+			conditionTrue(clusterStatus.Conditions, string(placementv1.PerClusterScheduledConditionType))
+		if !applied && !rollingPriorMember {
 			continue
 		}
 		members = append(members, clusterStatus.ClusterName)
@@ -48,13 +56,18 @@ func SelectedMembers(obj placementv1.PlacementObj) (Selection, error) {
 }
 
 func conditionTrue(conditions []metav1.Condition, conditionType string) bool {
+	status, found := conditionState(conditions, conditionType)
+	return found && status
+}
+
+func conditionState(conditions []metav1.Condition, conditionType string) (bool, bool) {
 	for i := range conditions {
 		condition := &conditions[i]
-		if condition.Type == conditionType && condition.Status == metav1.ConditionTrue {
-			return true
+		if condition.Type == conditionType {
+			return condition.Status == metav1.ConditionTrue, true
 		}
 	}
-	return false
+	return false, false
 }
 
 func MemberFromObject(obj *clusterv1.MemberCluster) (azure.Member, error) {

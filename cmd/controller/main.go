@@ -9,6 +9,7 @@ import (
 	controller "github.com/olivermking/glb-gateway-controller/internal/controller"
 	clusterv1 "go.goms.io/fleet/apis/cluster/v1"
 	placementv1 "go.goms.io/fleet/apis/placement/v1"
+	istiov1 "istio.io/client-go/pkg/apis/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -29,6 +30,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(api.AddToScheme(scheme))
 	utilruntime.Must(gwv1.Install(scheme))
+	utilruntime.Must(istiov1.AddToScheme(scheme))
 	utilruntime.Must(clusterv1.AddToScheme(scheme))
 	utilruntime.Must(placementv1.AddToScheme(scheme))
 }

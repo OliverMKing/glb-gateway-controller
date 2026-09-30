@@ -15,6 +15,7 @@ import (
 	"github.com/olivermking/glb-gateway-controller/internal/render"
 	clusterv1 "go.goms.io/fleet/apis/cluster/v1"
 	placementv1 "go.goms.io/fleet/apis/placement/v1"
+	istiov1 "istio.io/client-go/pkg/apis/networking/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -44,6 +45,7 @@ const (
 // +kubebuilder:rbac:groups=gateway.glb.azure.io,resources=globalgatewaypolicies/finalizers,verbs=update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses;gateways;httproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status;httproutes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=placement.kubernetes-fleet.io,resources=clusterresourceplacements;resourceplacements,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cluster.kubernetes-fleet.io,resources=memberclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=create;get;update
@@ -159,8 +161,21 @@ func (r *GlobalGatewayPolicyReconciler) Reconcile(ctx context.Context, req ctrl.
 		routeNames = append(routeNames, route.Name)
 	}
 
+	// Keep traffic local while healthy, then allow AppNet to use remote endpoints.
+	localityRules := render.LocalityDestinationRules(gateway, routeCopies)
+	localityRuleNames := make([]string, 0, len(localityRules))
+	for _, rule := range localityRules {
+		if err := controllerutil.SetControllerReference(policy, rule, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.apply(ctx, rule); err != nil {
+			return ctrl.Result{}, fmt.Errorf("apply locality DestinationRule %s: %w", rule.Name, err)
+		}
+		localityRuleNames = append(localityRuleNames, rule.Name)
+	}
+
 	placementName := child.Name
-	companion := render.CompanionResourcePlacement(policy.Namespace, placementName, append([]string(nil), selection.Members...), child.Name, routeNames)
+	companion := render.CompanionResourcePlacement(policy.Namespace, placementName, append([]string(nil), selection.Members...), child.Name, routeNames, localityRuleNames)
 	companion.SetOwnerReferences([]metav1.OwnerReference{{
 		APIVersion: api.GroupVersion.String(), Kind: "GlobalGatewayPolicy", Name: policy.Name, UID: policy.UID,
 		Controller: boolPtr(true), BlockOwnerDeletion: boolPtr(true),
@@ -351,7 +366,11 @@ func (r *GlobalGatewayPolicyReconciler) resolvePlacement(ctx context.Context, po
 	if err := r.Get(ctx, key, obj); err != nil {
 		return fleet.Selection{}, nil, fmt.Errorf("get workload placement: %w", err)
 	}
-	selection, err := fleet.SelectedMembers(obj)
+	previousMembers := make([]string, 0, len(policy.Status.Members))
+	for _, member := range policy.Status.Members {
+		previousMembers = append(previousMembers, member.Name)
+	}
+	selection, err := fleet.SelectedMembers(obj, previousMembers...)
 	return selection, obj, err
 }
 
@@ -658,6 +677,7 @@ func (r *GlobalGatewayPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error
 			handler.EnqueueRequestsFromMapFunc(r.policiesForHTTPRoute),
 			builder.WithPredicates(sourceChanges),
 		).
+		Owns(&istiov1.DestinationRule{}, builder.WithPredicates(sourceChanges)).
 		Named("globalgatewaypolicy").
 		Complete(r)
 }

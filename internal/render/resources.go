@@ -5,8 +5,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	placementv1 "go.goms.io/fleet/apis/placement/v1"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+	istioapi "istio.io/api/networking/v1alpha3"
+	istiov1 "istio.io/client-go/pkg/apis/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -103,6 +108,75 @@ func AttachedRouteCopies(sourceGateway *gwv1.Gateway, routes []gwv1.HTTPRoute, c
 	return result
 }
 
+func LocalityDestinationRules(sourceGateway *gwv1.Gateway, routes []*gwv1.HTTPRoute) []*istiov1.DestinationRule {
+	// Give each unique Service backend one local-first policy shared by all route copies.
+	type backendKey struct {
+		namespace string
+		name      string
+	}
+	backends := map[backendKey]struct{}{}
+	for _, route := range routes {
+		for _, rule := range route.Spec.Rules {
+			for _, backend := range rule.BackendRefs {
+				if backend.Group != nil && string(*backend.Group) != "" {
+					continue
+				}
+				if backend.Kind != nil && string(*backend.Kind) != "Service" {
+					continue
+				}
+				namespace := route.Namespace
+				if backend.Namespace != nil {
+					namespace = string(*backend.Namespace)
+				}
+				backends[backendKey{namespace: namespace, name: string(backend.Name)}] = struct{}{}
+			}
+		}
+	}
+
+	keys := make([]backendKey, 0, len(backends))
+	for key := range backends {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].namespace == keys[j].namespace {
+			return keys[i].name < keys[j].name
+		}
+		return keys[i].namespace < keys[j].namespace
+	})
+
+	result := make([]*istiov1.DestinationRule, 0, len(keys))
+	for _, key := range keys {
+		backendHash := fmt.Sprintf("%x", sha256.Sum256([]byte(key.namespace+"/"+key.name)))[:5]
+		result = append(result, &istiov1.DestinationRule{
+			TypeMeta: metav1.TypeMeta{APIVersion: istiov1.SchemeGroupVersion.String(), Kind: "DestinationRule"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      ChildName(key.name+"-locality-"+backendHash, sourceGateway.UID),
+				Namespace: sourceGateway.Namespace,
+				Labels: map[string]string{
+					ManagedLabel:   "true",
+					SourceUIDLabel: string(sourceGateway.UID),
+				},
+				Annotations: map[string]string{SourceAnnotation: sourceGateway.Namespace + "/" + sourceGateway.Name},
+			},
+			Spec: istioapi.DestinationRule{
+				Host: key.name + "." + key.namespace + ".svc.cluster.local",
+				TrafficPolicy: &istioapi.TrafficPolicy{
+					LoadBalancer: &istioapi.LoadBalancerSettings{LocalityLbSetting: &istioapi.LocalityLoadBalancerSetting{
+						Enabled: wrapperspb.Bool(true),
+					}},
+					OutlierDetection: &istioapi.OutlierDetection{
+						Consecutive_5XxErrors: wrapperspb.UInt32(5),
+						Interval:              durationpb.New(2 * time.Second),
+						BaseEjectionTime:      durationpb.New(30 * time.Second),
+						MaxEjectionPercent:    100,
+					},
+				},
+			},
+		})
+	}
+	return result
+}
+
 func parentMatches(ref gwv1.ParentReference, gateway *gwv1.Gateway) bool {
 	if ref.Name != gwv1.ObjectName(gateway.Name) {
 		return false
@@ -119,7 +193,7 @@ func parentMatches(ref gwv1.ParentReference, gateway *gwv1.Gateway) bool {
 	return true
 }
 
-func CompanionResourcePlacement(namespace, name string, memberNames []string, gatewayName string, routeNames []string) *placementv1.ResourcePlacement {
+func CompanionResourcePlacement(namespace, name string, memberNames []string, gatewayName string, routeNames, destinationRuleNames []string) *placementv1.ResourcePlacement {
 	// Pin generated networking objects to the workload placement's exact members.
 	sort.Strings(memberNames)
 	selectors := []placementv1.ResourceSelectorTerm{
@@ -127,6 +201,9 @@ func CompanionResourcePlacement(namespace, name string, memberNames []string, ga
 	}
 	for _, routeName := range routeNames {
 		selectors = append(selectors, placementv1.ResourceSelectorTerm{Group: gwv1.GroupName, Version: "v1", Kind: "HTTPRoute", Name: routeName})
+	}
+	for _, ruleName := range destinationRuleNames {
+		selectors = append(selectors, placementv1.ResourceSelectorTerm{Group: istiov1.GroupName, Version: "v1", Kind: "DestinationRule", Name: ruleName})
 	}
 	return &placementv1.ResourcePlacement{
 		TypeMeta: metav1.TypeMeta{APIVersion: placementv1.GroupVersion.String(), Kind: "ResourcePlacement"},
